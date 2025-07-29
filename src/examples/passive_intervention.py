@@ -8,7 +8,7 @@ import csv
 import threading
 
 
-from nml_hand_exo.hand_exo import HandExo
+from nml_hand_exo import HandExo, SerialComm
 
 
 ############### Change PARAMETERS here ############### 
@@ -18,7 +18,8 @@ PORT = 'COM5'
 BAUD_RATE = 57600
 motorID = 0
 
-stream_name = 'SAGA'     #TODO: vary stream name so that we don't pick up the wrong device       # Search for active stream names using names_of_active_lsl_streams.py and connect to NML wifi
+stream_name = 'FLEX'     #TODO: vary stream name so that we don't pick up the wrong device       # Search for active stream names using names_of_active_lsl_streams.py and connect to NML wifi
+stream_name = 'EXT'
 
 # max_flexion = 45   # Now calibrating during trials 
 trial_count = 5  # Number of times the control structure loops 
@@ -87,12 +88,10 @@ def send_command(exo, msg):
 # Change COM based on exo connection
 # Change baudrate if using old dynamixel motor to 1000000
 
-try:
-    exo = HandExo(port=PORT, baudrate=BAUD_RATE, verbose=True)
-    print(f"Connected to Exo on {PORT}")
-except Exception as e:
-    print(f"ERROR!!!!!!!!! Could not connect to {PORT}: {e}")
-    exo = None
+comm = SerialComm(port=PORT, baudrate=BAUD_RATE)
+exo = HandExo(comm, verbose=False)
+exo.connect()
+
 
 ############# Reconfigure the exo just in case ###################
 

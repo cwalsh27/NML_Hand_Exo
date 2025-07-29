@@ -1,17 +1,16 @@
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
+
 import pylsl
 from pylsl import StreamInlet  # , resolve_stream
 import time
-import pandas as pd
+
 from scipy.signal import butter, lfilter, lfilter_zi, iirnotch, filtfilt
 import serial
 import csv
 import threading
 
 
-from nml_hand_exo.hand_exo import HandExo
+from nml_hand_exo import HandExo, SerialComm
 
 
 
@@ -92,12 +91,9 @@ def send_command(exo, msg):
 # Change COM based on exo connection
 # Change baudrate if using old dynamixel motor to 1000000
 
-try:
-    exo = HandExo(port=PORT, baudrate=BAUD_RATE, verbose=True)
-    print(f"Connected to Exo on {PORT}")
-except Exception as e:
-    print(f"ERROR!!!!!!!!! Could not connect to {PORT}: {e}")
-    exo = None
+comm = SerialComm(port=PORT, baudrate=BAUD_RATE)
+exo = HandExo(comm, verbose=False)
+exo.connect()
 
 ############# Reconfigure the exo just in case ###################        
 # Reboot motors

@@ -1,10 +1,10 @@
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
+
 import pylsl
 from pylsl import StreamInlet  # , resolve_stream
 import time
-import pandas as pd
+
+ 
 from scipy.signal import butter, lfilter, lfilter_zi, iirnotch, filtfilt
 import serial
 import csv
@@ -12,13 +12,13 @@ import threading
 import random
 
 
-from nml_hand_exo.hand_exo import HandExo
+from nml_hand_exo import HandExo, SerialComm
 
 
 ############### Change PARAMETERS here ############### 
 
 sampling_rate = 2000  # Hz
-PORT = 'COM5'
+PORT = 'COM3'
 BAUD_RATE = 57600
 motorID = 0
 
@@ -90,12 +90,13 @@ def send_command(exo, msg):
 # Change COM based on exo connection
 # Change baudrate if using old dynamixel motor to 1000000
 
-try:
-    exo = HandExo(port=PORT, baudrate=BAUD_RATE, verbose=True)
-    print(f"Connected to Exo on {PORT}")
-except Exception as e:
-    print(f"ERROR!!!!!!!!! Could not connect to {PORT}: {e}")
-    exo = None
+comm = SerialComm(port=PORT, baudrate=BAUD_RATE)
+exo = HandExo(comm, verbose=False)
+exo.connect()
+print('exo connected')
+# except Exception as e:
+#     print(f"ERROR!!!!!!!!! Could not connect to {PORT}: {e}")
+#     exo = None
 
 ############# Reconfigure the exo just in case ###################
 
@@ -134,7 +135,7 @@ last_command = None  # Track last motor command to avoid repeats
 ############### Gradual Motion Function ############### 
 
 def gradual_motion(motorID, currentAngle, desiredAngle):
-
+    exo.enable_motor(motor_id=motorID)
     intermediateAngles = np.linspace(currentAngle, desiredAngle, 100)
     print("gradually moving")
     for interAngle in intermediateAngles:
@@ -149,21 +150,24 @@ def control_structure():
 
 
     '''Calibration Stage'''
+    exo.reboot_motor(motor_id=motorID)
+
     wait = input("Place wrist in a relaxed positioin with the forearm supported, such that the wrist is naturally flexed by gravity. Press any key to record the motor angle.")
     rest_angle = exo.get_motor_angle(motor_id=motorID)
 
-    wait = input("Move patients wrist to be as extended as possible, whether the limit is physiological or mechanical. This will define the bounds of the memory angles.\m Hit any key to record the motor angle.")
+    wait = input("Move patients wrist to be as extended as possible, whether the limit is physiological or mechanical. This will define the bounds of the memory angles.\n Hit any key to record the motor angle.")
     max_extension_angle = exo.get_motor_angle(motor_id=motorID)
 
     memory_range = abs(max_extension_angle - rest_angle)
-    memory_angleA = rest_angle - (memory_range * 0.25)
-    memory_angleB = rest_angle - (memory_range * 0.56)
-    memory_angleC = rest_angle - (memory_range * 0.82)
+    memory_angleA = rest_angle - (memory_range * 0.31)
+    memory_angleB = rest_angle - (memory_range * 0.62)
+    memory_angleC = rest_angle - (memory_range * 0.89)
 
-    fake_memory_angle_multipliers = [0.14, 0.09, 0.36, 0.46, 0.4, 0.7, 0.68, 0.92, 0.96]
+    fake_memory_angle_multipliers = [0.14, 0.09, 0.46, 0.42, 0.7, 0.99]
+    fake_memory_angle_multipliers = np.array(fake_memory_angle_multipliers)
     fake_memory_angles = rest_angle - (memory_range * fake_memory_angle_multipliers)
 
-
+    print(f"rest: {rest_angle}, memoryA: {memory_angleA}, memoryB: {memory_angleB}, memoryC: {memory_angleC}")
 
 
     '''Encoding of Memory Angles'''
@@ -198,7 +202,7 @@ def control_structure():
     
     reps_per_angle = trial_count / 6
     
-    trial_sequence = ['A'] * reps_per_angle + ['B'] * reps_per_angle + ['C'] * reps_per_angle + ['D'] * (reps_per_angle * 3)
+    trial_sequence = ['A'] * int(reps_per_angle) + ['B'] * int(reps_per_angle) + ['C'] * int(reps_per_angle) + ['D'] * (int(reps_per_angle) * 3)
     random.shuffle(trial_sequence)
 
     hits_and_misses = []
@@ -234,7 +238,7 @@ def control_structure():
             time.sleep(1)
         elif trial == 'D':
             print("Non-memory angle")
-            fake_angle = fake_memory_angles[random.randint(0, len(fake_memory_angles))]
+            fake_angle = fake_memory_angles[random.randint(0, (len(fake_memory_angles)-1))]
             exo.enable_motor(motor_id=motorID)
             gradual_motion(motorID, rest_angle, fake_angle)
             time.sleep(2)
@@ -246,16 +250,25 @@ def control_structure():
         angleGuess = input("Was the angle in the list? If so, which one was it? Enter 'a' for angleA, 'b' for angleB, 'c' for angleC, or 'd' for a fake memory angle.")
         angleGuess = angleGuess.upper()
 
+
+        if angleGuess=='Z':
+            print("early out")
+            break
+
+
         if angleGuess == trial:
-            hits_and_misses.append('1')
+            hits_and_misses.append((trial, 1))
         else:
-            hits_and_misses.append('0')
+            hits_and_misses.append((trial, 0))
 
 
         answers[angleGuess] += 1
 
+        
+
     with open(f"stmGuesses_{filename_timestamp}.txt", 'w') as guessFile:
         guessFile.write(" ".join(map(str, hits_and_misses)))
+        guessFile.write("\n Answer Dictionary")
         guessFile.write(str(answers))
 
 

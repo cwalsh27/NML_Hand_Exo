@@ -9,19 +9,22 @@ import threading
 import random
 
 
-from nml_hand_exo.hand_exo import HandExo
+from nml_hand_exo import HandExo, SerialComm
 
 
 ############### Change PARAMETERS here ############### 
 
 sampling_rate = 2000  # Hz
-PORT = 'COM5'
+PORT = 'COM3'
 BAUD_RATE = 57600
 motorID = 0
 
 stream_name = 'SAGA'     #TODO: vary stream name so that we don't pick up the wrong device       # Search for active stream names using names_of_active_lsl_streams.py and connect to NML wifi
 
 trial_count = 30      
+
+shared_imu_data = {"yaw": 0.0, "pitch": 0.0, "roll": 0.0}
+imu_lock = threading.Lock()
 
 ###############  Data Recording ############### 
 
@@ -65,19 +68,19 @@ recorded_timestamps = []
 
 ############### Backup for commands not in helper class ###############
 
-def send_command(exo, msg):
-    """Send a command to the exoskeleton."""
-    if exo:
-        try:
-            if not msg.endswith('\n'):
-                msg = msg + '\n'
-            exo.write(msg.encode('utf-8'))
-            print(f"Command sent: {msg.strip()}")
-            time.sleep(0.01)
-        except Exception as e:
-            print(f"Error sending command: {e}")
-    else:
-        print("Exoskeleton not connected, command not sent.")
+# def send_command(exo, msg):
+#     """Send a command to the exoskeleton."""
+#     if exo:
+#         try:
+#             if not msg.endswith('\n'):
+#                 msg = msg + '\n'
+#             exo.write(msg.encode('utf-8'))
+#             print(f"Command sent: {msg.strip()}")
+#             time.sleep(0.01)
+#         except Exception as e:
+#             print(f"Error sending command: {e}")
+#     else:
+#         print("Exoskeleton not connected, command not sent.")
 
 
 
@@ -86,12 +89,14 @@ def send_command(exo, msg):
 # Change COM based on exo connection
 # Change baudrate if using old dynamixel motor to 1000000
 
-try:
-    exo = HandExo(port=PORT, baudrate=BAUD_RATE, verbose=True)
-    print(f"Connected to Exo on {PORT}")
-except Exception as e:
-    print(f"ERROR!!!!!!!!! Could not connect to {PORT}: {e}")
-    exo = None
+# try:
+comm = SerialComm(port=PORT, baudrate=BAUD_RATE)
+exo = HandExo(comm, verbose=False)
+exo.connect()
+print(f"Connected to Exo on {PORT}")
+# except Exception as e:
+#     print(f"ERROR!!!!!!!!! Could not connect to {PORT}: {e}")
+#     exo = None
 
 ############# Reconfigure the exo just in case ###################
 
@@ -129,49 +134,63 @@ last_command = None  # Track last motor command to avoid repeats
 
 ############### Gradual Motion Functions ############### 
 
+def get_latest_imu_angle():
+        with imu_lock:
+            print(shared_imu_data)
+            return shared_imu_data.copy()
+
 def gradual_motion(motorID, currentMotorAngle, desiredMotorAngle):
+    exo.enable_motor(motor_id=motorID)
     intermediateAngles = np.linspace(currentMotorAngle, desiredMotorAngle, 100)
-    print("gradually moving")
+    print(f"gradually moving to motor angle {desiredMotorAngle}")
     for interAngle in intermediateAngles:
         exo.set_motor_angle(motor_id=motorID, angle=interAngle)
         time.sleep(0.01)
 
 def gradual_motion_until_angle(motorID, currentMotorAngle, desiredWristAngle):
+    exo.enable_motor(motor_id=motorID)
     step_angle = 0.5
-    print("gradually moving")
+    print(f"gradually moving to wrist angle {desiredWristAngle}")
+
     moving = True
     while moving:
-        exo.set_motor_angle(motor_id=motorID, angle=(currentMotorAngle+step_angle))
-        time.sleep(0.01)
-        if abs(exo.get_imu_angles() - desiredWristAngle) < step_angle:
+        newAngle = currentMotorAngle + step_angle
+        # exo.set_motor_angle(motor_id=motorID, angle=newAngle)
+        time.sleep(0.1)
+        currentWristAngle = get_latest_imu_angle()["yaw"]
+        if abs(currentWristAngle - desiredWristAngle) < step_angle:
             moving = False
         else:
             currentMotorAngle = currentMotorAngle + step_angle
     
 
 
-############### Manually Control Assistance: Thread Definition ############### TODO: parse the calls of get_imu_angles so that we have the right coordinate, determine which one to parse
+############### Manually Control Assistance: Thread Definition ###############
 
 def control_structure():
 
-    '''Calibration Stage''' 
-    wait = input("Place wrist in a neutral position. Hit any key to record motor angle")
+
+    '''Initial Calibration Stage''' 
+    wait = input("Place wrist in a neutral position. Hit any key to record motor/wrist angle")
     zero_motor_angle = exo.get_motor_angle(motor_id=motorID)
-    zero_wrist_angle = exo.get_imu_angles()
+    zero_wrist_angle = get_latest_imu_angle()["yaw"]
+    print(zero_motor_angle, zero_wrist_angle)
 
-    wait = input("Move patients wrist to be as flexed as possible, whether the limit is physiological or mechanical. This will define the bounds of the JND task if the participant does not have +- 15 degrees of motion in wrist joint.\m Hit any key to record the motor angle.")
+    wait = input("Move patients wrist to be as flexed as possible, whether the limit is physiological or mechanical. This will define the bounds of the JND task if the participant does not have +- 15 degrees of motion in wrist joint.\n Hit any key to record the motor angle.")
     max_flexion_motor_angle = exo.get_motor_angle(motor_id=motorID)
-    max_flexion_wrist_angle = exo.get_imu_angles()
+    max_flexion_wrist_angle = get_latest_imu_angle()["yaw"]
+    print(max_flexion_motor_angle, max_flexion_wrist_angle)
 
-    wait = input("Move patients wrist to be as extended as possible, whether the limit is physiological or mechanical. This will define the bounds of the JND task if the participant does not have +- 15 degrees of motion in wrist joint.\m Hit any key to record the motor angle.")
+    wait = input("Move patients wrist to be as extended as possible, whether the limit is physiological or mechanical. This will define the bounds of the JND task if the participant does not have +- 15 degrees of motion in wrist joint.\n Hit any key to record the motor angle.")
     max_extension_motor_angle = exo.get_motor_angle(motor_id=motorID)
-    max_extension_wrist_angle= exo.get_imu_angles()
+    max_extension_wrist_angle= get_latest_imu_angle()["yaw"]
+    print(max_extension_motor_angle, max_extension_wrist_angle)
 
-    if abs(zero_wrist_angle - max_flexion_wrist_angle) > 15.0:          
-        max_flexion_wrist_angle = zero_wrist_angle + 15.0
+    # if abs(zero_wrist_angle - max_flexion_wrist_angle) > 15.0:          
+    #     max_flexion_wrist_angle = zero_wrist_angle + 15.0
 
-    if abs(zero_wrist_angle - max_extension_wrist_angle) > 15.0:
-        max_extension_wrist_angle = zero_wrist_angle - 15.0
+    # if abs(zero_wrist_angle - max_extension_wrist_angle) > 15.0:
+    #     max_extension_wrist_angle = zero_wrist_angle - 15.0
 
     max_flexion_wrist_angle_difference = abs(zero_wrist_angle - max_flexion_wrist_angle)
     max_extension_wrist_angle_difference = abs(zero_wrist_angle - max_extension_wrist_angle)
@@ -180,18 +199,30 @@ def control_structure():
 
     '''Test Angle Initiation'''
     relative_flex_angles = [0.25] * 5 + [0.5] * 5 + [0.75] * 5  #rename based on direction of IMU movement
+    relative_flex_angles = np.array(relative_flex_angles)
+    print("relative flex: ", relative_flex_angles)
     flex_angles = relative_flex_angles * max_flexion_wrist_angle_difference + zero_wrist_angle
     relative_extend_angles = [-0.25] * 5 + [-0.5] * 5 + [-0.75] * 5 
+    relative_extend_angles = np.array(relative_extend_angles)
     extend_angles = relative_extend_angles * max_extension_wrist_angle_difference + zero_wrist_angle
-    reference_angles = flex_angles + extend_angles
+    print("flex angles:", flex_angles)
+    print("extend angles:", extend_angles)
+    reference_angles = np.concatenate(flex_angles, extend_angles)
 
     test_resolutions = [-2, -1, 0, 1, 2] * 5
+    test_resolutions = np.array(test_resolutions)
+    
+    print("ref angles:", reference_angles)
+    print("test resolutions:", test_resolutions)
 
     
     permutation = np.random.permutation(len(reference_angles))
 
     reference_angles = reference_angles[permutation]
     test_resolutions = test_resolutions[permutation]
+
+    print("ref angles:", reference_angles)
+    print("test resolutions:", test_resolutions)
 
 
     
@@ -220,14 +251,14 @@ def control_structure():
             trial_type = '='
        
         
-        print("reference angle")
+        print(f"reference angle: {ref_angle}")
         exo.enable_motor(motor_id=motorID)
         gradual_motion_until_angle(motorID=motorID, currentMotorAngle=zero_motor_angle, desiredWristAngle=ref_angle)
         time.sleep(2)
         gradual_motion(motorID=motorID, currentMotorAngle=exo.get_motor_angle(motor_id=motorID), desiredMotorAngle=zero_motor_angle)
         time.sleep(1)
 
-        print("test angle")
+        print(f"test angle: {test_angle}")
         exo.enable_motor(motor_id=motorID)
         gradual_motion_until_angle(motorID=motorID, currentMotorAngle=zero_motor_angle, desiredWristAngle=test_angle)
         time.sleep(2)
@@ -254,6 +285,13 @@ def control_structure():
 
     stop_event.set()
 
+def imu_manager():
+    while not stop_event.is_set():
+        rpy = exo.get_imu_angles()
+        if rpy is not None:
+            with imu_lock:
+                shared_imu_data.update(rpy)
+        time.sleep(0.01)
 
 
 ############### Main Function: Glorified Thread Manager ###############
@@ -264,16 +302,18 @@ if __name__ == "__main__":
 
     trigger_timestamps = []
 
-    # t1 = threading.Thread(target=record_data)
+    t1 = threading.Thread(target=imu_manager)
     t2 = threading.Thread(target=control_structure)
 
     stop_event = threading.Event()
 
-    # t1.start()
+    t1.start()
     t2.start()
 
-    # t1.join()
+    t1.join()
     t2.join()
+
+    control_structure()
 
     print("End of the line")
 
